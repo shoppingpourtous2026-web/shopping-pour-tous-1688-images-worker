@@ -1,0 +1,156 @@
+const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/u;
+const TOKEN_RE = /__SPT_(?:TAG|VALUE)_[A-Z]+__/g;
+const UNSAFE_HTML_RE = /<(?:script|style|iframe|object|embed|form|input|button|meta|link)\b|\son[a-z]+\s*=|javascript\s*:/iu;
+
+const englishWords = new Set([
+  "a", "an", "and", "are", "as", "available", "color", "colour", "design", "description",
+  "easy", "feature", "features", "for", "from", "high", "includes", "item", "made", "material",
+  "note", "of", "package", "please", "product", "quality", "quantity", "size", "specification",
+  "suitable", "the", "this", "to", "type", "use", "with", "without", "you", "your"
+]);
+
+const frenchWords = new Set([
+  "avec", "caractéristique", "caractéristiques", "ce", "cette", "comprend", "conception", "convient",
+  "couleur", "dans", "de", "des", "description", "du", "et", "facile", "fabriqué", "haute", "la",
+  "le", "les", "matière", "pour", "produit", "qualité", "quantité", "remarque", "sans", "spécification",
+  "taille", "type", "un", "une", "utilisation", "votre"
+]);
+
+const visibleText = html => String(html || "")
+  .replace(/<!--[\s\S]*?-->/g, " ")
+  .replace(/<[^>]+>/g, " ")
+  .replace(/&nbsp;|&#160;/gi, " ")
+  .replace(/&amp;/gi, "&")
+  .replace(/&quot;/gi, '"')
+  .replace(/&#39;|&apos;/gi, "'")
+  .replace(/\s+/g, " ")
+  .trim();
+
+const languageSignals = value => {
+  const text = visibleText(value).toLocaleLowerCase("fr");
+  const words = text.match(/\p{L}+/gu) || [];
+  return {
+    text,
+    words,
+    cjk: CJK_RE.test(text),
+    english: words.filter(word => englishWords.has(word)).length,
+    french: words.filter(word => frenchWords.has(word)).length
+  };
+};
+
+export function descriptionNeedsTranslation(html) {
+  const signals = languageSignals(html);
+  if (!signals.text) return false;
+  if (signals.cjk) return true;
+  if (signals.french >= 2 && signals.french >= signals.english) return false;
+  if (signals.english >= 2 && signals.english > signals.french) return true;
+  return signals.words.length >= 8 && signals.french < 2;
+}
+
+const alphaIndex = number => {
+  let value = Number(number) + 1;
+  let result = "";
+  while (value > 0) {
+    value -= 1;
+    result = String.fromCharCode(65 + (value % 26)) + result;
+    value = Math.floor(value / 26);
+  }
+  return result.padStart(4, "A");
+};
+
+const protectDescription = html => {
+  const originals = new Map();
+  let tagIndex = 0;
+  let valueIndex = 0;
+  const token = (kind, value) => {
+    const index = kind === "TAG" ? tagIndex++ : valueIndex++;
+    const key = `__SPT_${kind}_${alphaIndex(index)}__`;
+    originals.set(key, value);
+    return key;
+  };
+  let protectedText = String(html).replace(/<!--[\s\S]*?-->|<[^>]+>/g, value => token("TAG", value));
+  const protect = regex => {
+    protectedText = protectedText.replace(regex, value => token("VALUE", value));
+  };
+  protect(/https?:\/\/[^\s<>'"]+/giu);
+  protect(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/gu);
+  protect(/\b\d+(?:[.,]\d+)?(?:\s*[×xX]\s*\d+(?:[.,]\d+)?){0,2}(?:\s*(?:mm|cm|km|mg|kg|ml|cl|hz|mah|v|w|g|m|l|°c|%|pcs?|pièces?))?\b/giu);
+  protect(/\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{3,}\b/gu);
+  return {
+    protectedText,
+    originals,
+    expectedTokens: protectedText.match(TOKEN_RE) || []
+  };
+};
+
+const translatedTextFrom = result => {
+  const value = typeof result === "string"
+    ? result
+    : result?.response || result?.answer || result?.result?.response || result?.result?.answer || result?.text;
+  let text = String(value || "").trim();
+  const fenced = text.match(/^```(?:html|text)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced) text = fenced[1].trim();
+  if (!text) throw new Error("description_translation_empty");
+  return text;
+};
+
+const restoreAndValidate = (translated, protectedDescription, originalHtml) => {
+  const actualTokens = translated.match(TOKEN_RE) || [];
+  if (actualTokens.length !== protectedDescription.expectedTokens.length ||
+    actualTokens.some((value, index) => value !== protectedDescription.expectedTokens[index])) {
+    throw new Error("description_translation_placeholders_changed");
+  }
+  let restored = translated;
+  for (const [key, value] of protectedDescription.originals) {
+    const count = restored.split(key).length - 1;
+    if (count !== 1) throw new Error("description_translation_placeholder_invalid");
+    restored = restored.replace(key, value);
+  }
+  if (TOKEN_RE.test(restored)) throw new Error("description_translation_placeholder_remaining");
+  const before = languageSignals(originalHtml);
+  const after = languageSignals(restored);
+  if (!after.text || CJK_RE.test(after.text)) throw new Error("description_translation_not_french");
+  const ratio = after.text.length / Math.max(1, before.text.length);
+  if (ratio < 0.4 || ratio > 2.8) throw new Error("description_translation_length_invalid");
+  if (after.text === before.text && descriptionNeedsTranslation(originalHtml)) {
+    throw new Error("description_translation_unchanged");
+  }
+  if (after.french < 1 && after.words.length >= 8) throw new Error("description_translation_language_unverified");
+  return restored;
+};
+
+export async function translateDescriptionToFrench(html, env) {
+  const originalHtml = String(html || "").trim();
+  if (!originalHtml) return { changed: false, html: originalHtml, reason: "empty" };
+  if (!descriptionNeedsTranslation(originalHtml)) {
+    return { changed: false, html: originalHtml, reason: "already_french_or_neutral" };
+  }
+  if (originalHtml.length > 45_000) throw new Error("description_too_large_to_translate_safely");
+  if (UNSAFE_HTML_RE.test(originalHtml)) throw new Error("description_html_unsafe_original_preserved");
+  if (!env?.AI?.run) throw new Error("cloudflare_ai_binding_missing");
+
+  const protectedDescription = protectDescription(originalHtml);
+  const prompt = [
+    "Traduis littéralement en français professionnel le texte de cette description produit 1688.",
+    "Le texte source peut être en anglais, en chinois ou mélanger plusieurs langues.",
+    "N'ajoute, ne supprime et n'invente aucune information, caractéristique, promesse ou avantage.",
+    "Tous les marqueurs __SPT_...__ représentent des balises HTML ou des valeurs factuelles protégées.",
+    "Recopie chaque marqueur exactement une fois, sans le modifier, et conserve leur ordre.",
+    "Ne traduis pas les noms de marque ni les références de modèle.",
+    "Réponds uniquement avec la description traduite, sans explication et sans bloc Markdown.",
+    "DESCRIPTION À TRADUIRE :",
+    protectedDescription.protectedText
+  ].join("\n");
+  const result = await env.AI.run(env.SPT_1688_TEXT_MODEL || "@cf/zai-org/glm-4.7-flash", {
+    messages: [
+      { role: "system", content: "Tu es un traducteur professionnel extrêmement fidèle pour une boutique belge francophone." },
+      { role: "user", content: prompt }
+    ],
+    temperature: 0,
+    max_tokens: 8192,
+    stream: false
+  });
+  const translated = translatedTextFrom(result);
+  const restored = restoreAndValidate(translated, protectedDescription, originalHtml);
+  return { changed: restored !== originalHtml, html: restored, reason: "translated_to_french" };
+}
