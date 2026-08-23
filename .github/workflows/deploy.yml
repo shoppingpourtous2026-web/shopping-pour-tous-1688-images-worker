@@ -91,5 +91,14 @@ jobs:
         run: |
           set -euo pipefail
           base='https://shopping-pour-tous-1688-images.shoppingpourtous2026.workers.dev'
-          curl --fail --silent --show-error --max-time 20 "$base/health" -o /tmp/spt-1688-health.json
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --show-error --max-time 20 "$base/health" -o /tmp/spt-1688-health.json; then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo 'Le Worker ne répond pas encore après 12 essais.'
+              exit 1
+            fi
+            sleep 5
+          done
           node -e "const d=require('/tmp/spt-1688-health.json'); if(d.ok!==true||d.service!=='shopping-pour-tous-1688-images') process.exit(1)"
