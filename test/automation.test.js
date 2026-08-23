@@ -106,6 +106,39 @@ test("un échec de retouche conserve toujours l'original", async () => {
   assert.equal(calls.length, 0);
 });
 
+test("un échec de retouche écarte l'image chinoise si une image propre existe", async () => {
+  const calls = [];
+  const cleanUrl = "https://cdn11.bigcommerce.com/a/clean.jpg";
+  const chineseUrl = "https://cdn11.bigcommerce.com/a/chinese.jpg";
+  const result = await automate1688Images(capture, {}, {
+    ...noDescriptionChange,
+    listRecentProducts: async () => [{ id: 99, name: capture.sourceTitle, sku: "" }],
+    getProductImages: async () => [
+      { id: 10, url_standard: cleanUrl, is_thumbnail: false },
+      { id: 11, url_standard: chineseUrl, is_thumbnail: true }
+    ],
+    getProductVariants: async () => [{ id: 501, image_url: chineseUrl }],
+    getAutomationState: async () => null,
+    analyseImage: async url => url === cleanUrl
+      ? { action: "keep", containsCjk: false, confidence: 1, textCoverage: 0 }
+      : { action: "remove_text", containsCjk: true, confidence: 0.99, textCoverage: 0.2 },
+    editImage: async () => { throw new Error("retouche_indisponible"); },
+    uploadProductImage: async () => { throw new Error("ne_devrait_pas_arriver"); },
+    setVariantImage: async (...args) => calls.push(["variant", ...args.slice(0, 3)]),
+    updateProductImage: async (...args) => calls.push(["thumbnail", ...args.slice(0, 3)]),
+    deleteProductImage: async (...args) => calls.push(["delete", ...args.slice(0, 2)]),
+    saveAutomationState: async () => undefined
+  });
+  assert.equal(result.deleted, 1);
+  assert.equal(result.variantsUpdated, 1);
+  assert.equal(result.failed, 0);
+  assert.deepEqual(calls, [
+    ["variant", 99, 501, cleanUrl],
+    ["thumbnail", 99, 10, { is_thumbnail: true }],
+    ["delete", 99, 11]
+  ]);
+});
+
 test("une retouche qui change la variante est refusée et l'original reste en place", async () => {
   const deleted = [];
   let analyses = 0;
@@ -144,7 +177,7 @@ test("une description anglaise est traduite sans modifier le titre du produit", 
     getProductImages: async () => [],
     getProductVariants: async () => [],
     getAutomationState: async () => null,
-    translateDescriptionToFrench: async () => ({ changed: true, html: french, reason: "translated_to_french" }),
+    translateDescriptionToFrench: async () => ({ changed: true, html: french, reason: "translated_to_french_with_emoji" }),
     updateProductDescription: async (...args) => updates.push(args.slice(0, 2)),
     analyseImage: async () => { throw new Error("image_analysis_not_expected"); },
     saveAutomationState: async (_id, state) => states.push(state)
@@ -152,8 +185,8 @@ test("une description anglaise est traduite sans modifier le titre du produit", 
   assert.equal(result.descriptionTranslated, 1);
   assert.equal(result.failed, 0);
   assert.deepEqual(updates, [[99, french]]);
-  assert.equal(states[0].version, 3);
-  assert.equal(states[0].description.status, "translated_to_french");
+  assert.equal(states[0].version, 4);
+  assert.equal(states[0].description.status, "translated_to_french_with_emoji");
   assert.equal(states[0].sourceTitle, capture.sourceTitle);
 });
 
