@@ -2,12 +2,14 @@ const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/u;
 const TOKEN_RE = /__SPT_(?:TAG|VALUE)_[A-Z]+__/g;
 const UNSAFE_HTML_RE = /<(?:script|style|iframe|object|embed|form|input|button|meta|link)\b|\son[a-z]+\s*=|javascript\s*:/iu;
 const EMOJI_RE = /\p{Extended_Pictographic}/u;
+const EMOJI_SEQUENCE_RE = /[\p{Extended_Pictographic}\uFE0F\u200D]+/gu;
 
 const englishWords = new Set([
   "a", "an", "and", "are", "as", "available", "color", "colour", "design", "description",
-  "easy", "feature", "features", "for", "from", "high", "includes", "item", "made", "material",
-  "note", "of", "package", "please", "product", "quality", "quantity", "size", "specification",
-  "suitable", "the", "this", "to", "type", "use", "with", "without", "you", "your"
+  "drain", "easy", "faucet", "feature", "features", "for", "from", "high", "includes", "item",
+  "launch", "made", "material", "note", "of", "origin", "package", "pad", "pattern", "please",
+  "product", "quality", "quantity", "size", "solid", "specification", "suitable", "the", "this",
+  "time", "to", "type", "upgraded", "use", "washbasin", "with", "without", "you", "your"
 ]);
 
 const frenchWords = new Set([
@@ -29,12 +31,13 @@ const visibleText = html => String(html || "")
 
 const addProfessionalEmoji = html => {
   const value = String(html || "");
-  if (!value || EMOJI_RE.test(value)) return value;
-  const styled = value.replace(
+  if (!value) return value;
+  const cleaned = value.replace(EMOJI_SEQUENCE_RE, "").replace(/ {2,}/g, " ");
+  const styled = cleaned.replace(
     /(<(?:p|h[1-6]|li|div)\b[^>]*>)(\s*)/i,
     "$1$2✨ "
   );
-  return styled === value ? `✨ ${value}` : styled;
+  return styled === cleaned ? `✨ ${cleaned}` : styled;
 };
 
 const languageSignals = value => {
@@ -127,6 +130,9 @@ const restoreAndValidate = (translated, protectedDescription, originalHtml) => {
     throw new Error("description_translation_unchanged");
   }
   if (after.french < 1 && after.words.length >= 8) throw new Error("description_translation_language_unverified");
+  if (after.english >= 3 && after.english > after.french / 2) {
+    throw new Error("description_translation_still_contains_english");
+  }
   return restored;
 };
 
@@ -159,17 +165,30 @@ export async function translateDescriptionToFrench(html, env) {
     "DESCRIPTION À TRADUIRE :",
     protectedDescription.protectedText
   ].join("\n");
-  const result = await env.AI.run(env.SPT_1688_TEXT_MODEL || "@cf/zai-org/glm-4.7-flash", {
-    messages: [
-      { role: "system", content: "Tu es un traducteur professionnel extrêmement fidèle pour une boutique belge francophone." },
-      { role: "user", content: prompt }
-    ],
-    temperature: 0,
-    max_tokens: 8192,
-    stream: false
-  });
-  const translated = translatedTextFrom(result);
-  const restored = restoreAndValidate(translated, protectedDescription, originalHtml);
-  const styled = addProfessionalEmoji(restored);
-  return { changed: styled !== originalHtml, html: styled, reason: "translated_to_french_with_emoji" };
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await env.AI.run(env.SPT_1688_TEXT_MODEL || "@cf/zai-org/glm-4.7-flash", {
+      messages: [
+        { role: "system", content: "Tu es un traducteur professionnel extrêmement fidèle pour une boutique belge francophone." },
+        {
+          role: "user",
+          content: attempt === 0
+            ? prompt
+            : `${prompt}\nCONTRÔLE OBLIGATOIRE : aucun mot anglais ou chinois ne doit rester dans le résultat.`
+        }
+      ],
+      temperature: 0,
+      max_tokens: 8192,
+      stream: false
+    });
+    try {
+      const translated = translatedTextFrom(result);
+      const restored = restoreAndValidate(translated, protectedDescription, originalHtml);
+      const styled = addProfessionalEmoji(restored);
+      return { changed: styled !== originalHtml, html: styled, reason: "translated_to_french_with_emoji" };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("description_translation_failed");
 }
