@@ -202,15 +202,16 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
   );
   const allCandidates = createCandidates(images, variants, maxImages);
   const candidates = allCandidates.filter(candidate => !processedKeys.has(candidate.key)).slice(0, batchSize);
-  const analysed = [];
-  for (const candidate of candidates) {
+  const analysed = await Promise.all(candidates.map(async candidate => {
     try {
       const plan = await deps.analyseImage(candidate.url, product.name, env);
-      analysed.push({ ...candidate, plan, status: plan.action === "keep" ? "kept" : "planned" });
-      if (plan.action === "keep") processedKeys.add(candidate.key);
+      return { ...candidate, plan, status: plan.action === "keep" ? "kept" : "planned" };
     } catch (error) {
-      analysed.push({ ...candidate, status: "analysis_failed", error: String(error?.message || error) });
+      return { ...candidate, status: "analysis_failed", error: String(error?.message || error) };
     }
+  }));
+  for (const item of analysed) {
+    if (item.plan?.action === "keep") processedKeys.add(item.key);
   }
 
   const imageById = new Map(images.map(image => [Number(image.id), image]));
@@ -226,6 +227,30 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
   let failed = analysed.filter(item => item.status === "analysis_failed").length + descriptionFailed;
 
   for (const item of analysed.filter(candidate => ["remove_text", "translate"].includes(candidate.plan?.action))) {
+    if (fallback?.url && ((item.imageId && activeGalleryCount > 1) || (!item.imageId && item.variantIds.length))) {
+      try {
+        for (const variantId of item.variantIds) {
+          await deps.setVariantImage(productId, variantId, fallback.url, env);
+          variantsUpdated += 1;
+        }
+        if (item.imageId) {
+          const original = imageById.get(item.imageId);
+          if (original?.is_thumbnail === true && Number(fallback.image?.id)) {
+            await deps.updateProductImage(productId, Number(fallback.image.id), { is_thumbnail: true }, env);
+          }
+          await deps.deleteProductImage(productId, item.imageId, env);
+          activeGalleryCount -= 1;
+          deleted += 1;
+          item.status = "removed_using_verified_clean_fallback";
+        } else {
+          item.status = "variant_relinked_to_verified_clean_gallery";
+        }
+        processedKeys.add(item.key);
+        continue;
+      } catch (error) {
+        item.error = `clean_fallback_failed: ${String(error?.message || error)}`;
+      }
+    }
     try {
       const editSourceUrl = String(
         item.image?.url_thumbnail || item.image?.url_standard || item.url
