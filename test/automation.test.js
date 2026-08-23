@@ -10,6 +10,12 @@ const capture = {
   marketplace: "1688"
 };
 
+const noDescriptionChange = {
+  getProductDetails: async () => ({ description: "" }),
+  translateDescriptionToFrench: async html => ({ changed: false, html, reason: "empty" }),
+  updateProductDescription: async () => { throw new Error("description_update_not_expected"); }
+};
+
 test("selectCaptureProduct exige une correspondance unique", () => {
   assert.equal(selectCaptureProduct(capture, [{ id: 7, name: "Produit test 1688 très utile", sku: "" }]).id, 7);
   assert.equal(selectCaptureProduct(capture, [{ id: 8, name: "Autre titre", sku: "DS-123456789-BE" }]).id, 8);
@@ -26,6 +32,7 @@ test("une image chinoise est remplacée puis reliée à la variante avant suppre
     { id: 11, url_standard: "https://cdn11.bigcommerce.com/a/chinese.jpg", sort_order: 1, is_thumbnail: false }
   ];
   const result = await automate1688Images(capture, { SPT_1688_MAX_IMAGES: "12" }, {
+    ...noDescriptionChange,
     listRecentProducts: async () => [{ id: 99, name: capture.sourceTitle, sku: "" }],
     getProductImages: async () => images,
     getProductVariants: async () => [{ id: 501, image_url: images[1].url_standard }],
@@ -49,6 +56,7 @@ test("une image chinoise est remplacée puis reliée à la variante avant suppre
 test("un échec de retouche conserve toujours l'original", async () => {
   const calls = [];
   const result = await automate1688Images(capture, {}, {
+    ...noDescriptionChange,
     listRecentProducts: async () => [{ id: 99, name: capture.sourceTitle, sku: "" }],
     getProductImages: async () => [{ id: 11, url_standard: "https://cdn11.bigcommerce.com/a/chinese.jpg", is_thumbnail: true }],
     getProductVariants: async () => [],
@@ -69,6 +77,7 @@ test("une retouche qui change la variante est refusée et l'original reste en pl
   const deleted = [];
   let analyses = 0;
   const result = await automate1688Images(capture, {}, {
+    ...noDescriptionChange,
     listRecentProducts: async () => [{ id: 99, name: capture.sourceTitle, sku: "" }],
     getProductImages: async () => [{ id: 11, url_standard: "https://cdn11.bigcommerce.com/a/chinese.jpg", is_thumbnail: true }],
     getProductVariants: async () => [],
@@ -86,4 +95,31 @@ test("une retouche qui change la variante est refusée et l'original reste en pl
   assert.equal(result.failed, 1);
   assert.deepEqual(deleted, [12]);
   assert.ok(!deleted.includes(11));
+});
+
+test("une description anglaise est traduite sans modifier le titre du produit", async () => {
+  const updates = [];
+  const states = [];
+  const french = "<p>Carnet de haute qualité avec 12 feuilles.</p>";
+  const result = await automate1688Images(capture, {}, {
+    listRecentProducts: async () => [{ id: 99, name: capture.sourceTitle, sku: "" }],
+    getProductDetails: async () => ({
+      id: 99,
+      name: capture.sourceTitle,
+      description: "<p>High quality notebook with 12 sheets.</p>"
+    }),
+    getProductImages: async () => [],
+    getProductVariants: async () => [],
+    getAutomationState: async () => null,
+    translateDescriptionToFrench: async () => ({ changed: true, html: french, reason: "translated_to_french" }),
+    updateProductDescription: async (...args) => updates.push(args.slice(0, 2)),
+    analyseImage: async () => { throw new Error("image_analysis_not_expected"); },
+    saveAutomationState: async (_id, state) => states.push(state)
+  });
+  assert.equal(result.descriptionTranslated, 1);
+  assert.equal(result.failed, 0);
+  assert.deepEqual(updates, [[99, french]]);
+  assert.equal(states[0].version, 2);
+  assert.equal(states[0].description.status, "translated_to_french");
+  assert.equal(states[0].sourceTitle, capture.sourceTitle);
 });
