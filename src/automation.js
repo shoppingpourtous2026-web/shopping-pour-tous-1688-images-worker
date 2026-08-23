@@ -1,15 +1,18 @@
 import {
   deleteProductImage,
   getAutomationState,
+  getProductDetails,
   getProductImages,
   getProductVariants,
   listRecentProducts,
   saveAutomationState,
   setVariantImage,
   updateProductImage,
+  updateProductDescription,
   uploadProductImage
 } from "./bigcommerce-images.js";
 import { analyseImage, editImage } from "./cloudflare-image-cleaner.js";
+import { translateDescriptionToFrench } from "./cloudflare-description-translator.js";
 import { imageKey, normaliseTitle, prepareCapture } from "./normalise.js";
 
 const defaults = {
@@ -17,12 +20,15 @@ const defaults = {
   deleteProductImage,
   editImage,
   getAutomationState,
+  getProductDetails,
   getProductImages,
   getProductVariants,
   listRecentProducts,
   saveAutomationState,
   setVariantImage,
   updateProductImage,
+  updateProductDescription,
+  translateDescriptionToFrench,
   uploadProductImage
 };
 
@@ -64,6 +70,16 @@ const imageSignature = (images, variants) => [
   ...images.map(image => `p:${Number(image?.id)}:${imageKey(bestImageUrl(image))}`),
   ...variants.map(variant => `v:${Number(variant?.id)}:${imageKey(variant?.image_url)}`)
 ].filter(Boolean).sort().join("|");
+
+const textFingerprint = value => {
+  const text = String(value || "");
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${text.length}:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+};
 
 const safePlanSummary = item => ({
   source: item.source,
@@ -109,15 +125,44 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
   if (!product) return { matched: false, sourceTitle: capture.sourceTitle };
 
   const productId = Number(product.id);
-  const [images, variants, previous] = await Promise.all([
+  const [images, variants, previous, productDetails] = await Promise.all([
     deps.getProductImages(productId, env),
     deps.getProductVariants(productId, env),
-    deps.getAutomationState(productId, env)
+    deps.getAutomationState(productId, env),
+    deps.getProductDetails(productId, env)
   ]);
   const signature = imageSignature(images, variants);
-  if (previous?.status === "completed" && previous?.signature === signature &&
+  const originalDescription = String(productDetails?.description || "");
+  const originalDescriptionFingerprint = textFingerprint(originalDescription);
+  if (Number(previous?.version) >= 2 && previous?.status === "completed" && previous?.signature === signature &&
+    previous?.descriptionFingerprint === originalDescriptionFingerprint &&
     String(previous?.supplierProductId || "") === capture.supplierProductId) {
     return { matched: true, productId, alreadyProcessed: true, ...previous.summary };
+  }
+
+  let finalDescription = originalDescription;
+  let descriptionTranslated = 0;
+  let descriptionPreserved = 0;
+  let descriptionSkipped = 0;
+  let descriptionFailed = 0;
+  let descriptionStatus = "skipped";
+  let descriptionError = null;
+  try {
+    const translation = await deps.translateDescriptionToFrench(originalDescription, env);
+    if (translation.changed) {
+      await deps.updateProductDescription(productId, translation.html, env);
+      finalDescription = translation.html;
+      descriptionTranslated = 1;
+      descriptionStatus = "translated_to_french";
+    } else {
+      descriptionSkipped = 1;
+      descriptionStatus = translation.reason || "already_french_or_neutral";
+    }
+  } catch (error) {
+    descriptionPreserved = 1;
+    descriptionFailed = 1;
+    descriptionStatus = "translation_failed_original_preserved";
+    descriptionError = String(error?.message || error).slice(0, 200);
   }
 
   const maxImages = Math.min(20, Math.max(1, Number(env?.SPT_1688_MAX_IMAGES) || 12));
@@ -139,7 +184,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
   let replaced = 0;
   let deleted = 0;
   let variantsUpdated = 0;
-  let failed = analysed.filter(item => item.status === "analysis_failed").length;
+  let failed = analysed.filter(item => item.status === "analysis_failed").length + descriptionFailed;
 
   for (const item of analysed.filter(candidate => ["remove_text", "translate"].includes(candidate.plan?.action))) {
     try {
@@ -216,7 +261,10 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
     deleted,
     variantsUpdated,
     failed,
-    preservedForSafety: analysed.filter(item => item.status === "rejected_but_preserved_for_safety").length
+    preservedForSafety: analysed.filter(item => item.status === "rejected_but_preserved_for_safety").length,
+    descriptionTranslated,
+    descriptionPreserved,
+    descriptionSkipped
   };
   let finalSignature = signature;
   if (replaced || deleted || variantsUpdated) {
@@ -232,14 +280,19 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
     }
   }
   const state = {
-    version: 1,
+    version: 2,
     status: failed ? "completed_with_warnings" : "completed",
     productId,
     sourceTitle: capture.sourceTitle,
     supplierProductId: capture.supplierProductId,
     signature: finalSignature,
+    descriptionFingerprint: textFingerprint(finalDescription),
     processedAt: new Date().toISOString(),
     summary,
+    description: {
+      status: descriptionStatus,
+      error: descriptionError
+    },
     images: analysed.map(safePlanSummary)
   };
   await deps.saveAutomationState(productId, state, env);
