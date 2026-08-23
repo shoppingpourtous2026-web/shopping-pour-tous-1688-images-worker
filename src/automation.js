@@ -129,7 +129,7 @@ const preservesProductIdentity = (before, after) => {
   return true;
 };
 
-const createCandidates = (images, variants, maxImages) => {
+const createCandidates = (images, variants, maxImages, processedVariantIds = new Set()) => {
   const byKey = new Map();
   const add = (url, patch) => {
     const key = imageKey(url);
@@ -142,7 +142,11 @@ const createCandidates = (images, variants, maxImages) => {
     if (patch.source === "gallery") candidate.source = "gallery";
   };
   for (const image of images) add(bestImageUrl(image), { source: "gallery", imageId: Number(image.id), image });
-  for (const variant of variants) add(String(variant?.image_url || ""), { source: "variant", variantId: Number(variant.id) });
+  for (const variant of variants) {
+    const variantId = Number(variant?.id);
+    if (!variantId || processedVariantIds.has(variantId)) continue;
+    add(String(variant?.image_url || ""), { source: "variant", variantId });
+  }
   return [...byKey.values()].slice(0, maxImages);
 };
 
@@ -200,7 +204,12 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
       ? previous.progress.processedKeys.map(value => String(value || "")).filter(Boolean)
       : []
   );
-  const allCandidates = createCandidates(images, variants, maxImages);
+  const processedVariantIds = new Set(
+    Number(previous?.version) >= automationStateVersion && Array.isArray(previous?.progress?.processedVariantIds)
+      ? previous.progress.processedVariantIds.map(Number).filter(Number.isInteger)
+      : []
+  );
+  const allCandidates = createCandidates(images, variants, maxImages, processedVariantIds);
   const candidates = allCandidates.filter(candidate => !processedKeys.has(candidate.key)).slice(0, batchSize);
   const imageById = new Map(images.map(image => [Number(image.id), image]));
   const existingClean = images.find(image => processedKeys.has(imageKey(bestImageUrl(image))));
@@ -220,7 +229,10 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
     }
   }));
   for (const item of analysed) {
-    if (item.plan?.action === "keep") processedKeys.add(item.key);
+    if (item.plan?.action === "keep") {
+      processedKeys.add(item.key);
+      if (item.imageId) item.variantIds.forEach(variantId => processedVariantIds.add(variantId));
+    }
   }
 
   const kept = analysed.find(item => item.plan?.action === "keep" && item.imageId);
@@ -239,6 +251,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
         for (const variantId of item.variantIds) {
           await deps.setVariantImage(productId, variantId, fallback.url, env);
           variantsUpdated += 1;
+          processedVariantIds.add(variantId);
         }
         if (item.imageId) {
           const original = imageById.get(item.imageId);
@@ -284,6 +297,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
       for (const variantId of item.variantIds) {
         await deps.setVariantImage(productId, variantId, cleanUrl, env);
         variantsUpdated += 1;
+        processedVariantIds.add(variantId);
       }
       if (item.imageId) {
         await deps.deleteProductImage(productId, item.imageId, env);
@@ -302,6 +316,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
           for (const variantId of item.variantIds) {
             await deps.setVariantImage(productId, variantId, fallback.url, env);
             variantsUpdated += 1;
+            processedVariantIds.add(variantId);
           }
           if (item.imageId && activeGalleryCount > 1) {
             const original = imageById.get(item.imageId);
@@ -343,6 +358,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
       for (const variantId of item.variantIds) {
         await deps.setVariantImage(productId, variantId, fallback.url, env);
         variantsUpdated += 1;
+        processedVariantIds.add(variantId);
       }
       if (item.imageId) {
         const original = imageById.get(item.imageId);
@@ -370,6 +386,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
       for (const variantId of item.variantIds) {
         await deps.setVariantImage(productId, variantId, fallback.url, env);
         variantsUpdated += 1;
+        processedVariantIds.add(variantId);
       }
       item.status = "variant_relinked_to_verified_clean_gallery";
       processedKeys.add(item.key);
@@ -400,7 +417,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
       deps.getProductVariants(productId, env)
     ]);
     finalSignature = imageSignature(finalImages, finalVariants);
-    remainingCandidates = createCandidates(finalImages, finalVariants, maxImages)
+    remainingCandidates = createCandidates(finalImages, finalVariants, maxImages, processedVariantIds)
       .filter(candidate => !processedKeys.has(candidate.key)).length;
   } catch (_) {
     // Le lot reste valable. Le prochain passage reprendra les éléments non marqués.
@@ -422,6 +439,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
     },
     progress: {
       processedKeys: [...processedKeys].slice(-200),
+      processedVariantIds: [...processedVariantIds].slice(-500),
       remainingCandidates
     },
     images: analysed.map(safePlanSummary)
