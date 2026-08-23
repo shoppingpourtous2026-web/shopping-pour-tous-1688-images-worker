@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shopping-pour-tous-1688-images",
+  "main": "src/worker-1688-images.js",
+  "compatibility_date": "2026-08-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "ai": {
+    "binding": "AI"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vars": {
+    "SPT_1688_VISION_MODEL": "@cf/moondream/moondream3.1-9B-A2B",
+    "SPT_1688_IMAGE_MODEL": "@cf/black-forest-labs/flux-2-klein-4b",
+    "SPT_1688_MAX_IMAGES": "12",
+    "SPT_1688_MIN_CONFIDENCE": "0.85"
+  }
+}
+
