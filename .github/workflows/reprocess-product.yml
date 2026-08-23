@@ -49,7 +49,7 @@ jobs:
             throw new Error(`produit_introuvable_${productResponse.status}`);
           }
           let result;
-          for (let lot = 1; lot <= 8; lot += 1) {
+          for (let lot = 1; lot <= 12; lot += 1) {
             const workerResponse = await fetch(
               'https://shopping-pour-tous-1688-images.shoppingpourtous2026.workers.dev/api/1688/image-automation',
               {
@@ -71,9 +71,9 @@ jobs:
             console.log(JSON.stringify({ etape: 'traitement', lot, statutHttp: workerResponse.status, resultat: result }, null, 2));
             if (!workerResponse.ok || result?.matched !== true) throw new Error('retraitement_non_termine');
             if (result.hasMore !== true) break;
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise(resolve => setTimeout(resolve, 12000));
           }
-          if (result?.hasMore === true) throw new Error('retraitement_incomplet_apres_8_lots');
+          if (result?.hasMore === true) throw new Error('retraitement_incomplet_apres_12_lots');
 
           const stateResponse = await fetch(
             `${api}/catalog/products/${productId}/metafields?namespace=shopping_1688_images&key=automation_v1&limit=10`,
