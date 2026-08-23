@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { imageKey, normaliseTitle, prepareCapture } from "../src/normalise.js";
-import { analyseImage, normalisePlan } from "../src/cloudflare-image-cleaner.js";
+import { analyseImage, editImage, normalisePlan } from "../src/cloudflare-image-cleaner.js";
 
 test("prepareCapture accepte uniquement une automatisation 1688 confirmée", () => {
   const result = prepareCapture({
@@ -167,6 +167,36 @@ test("analyseImage rattrape le chinois par transcription après un faux CLEAR", 
     });
     assert.equal(result.containsCjk, true);
     assert.equal(result.action, "remove_text");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("editImage demande à Cloudflare une référence inférieure à 512 pixels", async () => {
+  const originalFetch = globalThis.fetch;
+  let receivedOptions = null;
+  const jpeg = new Uint8Array([
+    0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08,
+    0x01, 0xe0, 0x01, 0x90, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00
+  ]);
+  globalThis.fetch = async (_url, options) => {
+    receivedOptions = options;
+    return new Response(jpeg, {
+      status: 200,
+      headers: { "content-type": "image/jpeg", "content-length": String(jpeg.length) }
+    });
+  };
+  try {
+    const cleaned = await editImage(
+      "https://cdn11.bigcommerce.com/test/large.jpg",
+      { action: "remove_text", essentialFrenchText: [] },
+      "Produit test",
+      { AI: { run: async () => ({ image: "AQID" }) } }
+    );
+    assert.equal(receivedOptions.cf.image.width, 480);
+    assert.equal(receivedOptions.cf.image.height, 480);
+    assert.equal(receivedOptions.cf.image.fit, "scale-down");
+    assert.deepEqual([...cleaned.bytes], [1, 2, 3]);
   } finally {
     globalThis.fetch = originalFetch;
   }
