@@ -2,7 +2,10 @@ const parseJsonAnswer = value => {
   const text = String(value || "").trim();
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
   const candidate = fenced || text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
-  if (!candidate) throw new Error("cloudflare_analysis_empty");
+  if (!candidate) {
+    const diagnostic = text.replace(/\s+/g, " ").slice(0, 280) || "empty";
+    throw new Error(`cloudflare_analysis_unstructured:${diagnostic}`);
+  }
   return JSON.parse(candidate);
 };
 
