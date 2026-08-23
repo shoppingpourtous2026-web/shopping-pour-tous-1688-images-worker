@@ -51,20 +51,19 @@ test("une image chinoise est remplacée puis reliée à la variante avant suppre
   const calls = [];
   let editedUrl = "";
   const images = [
-    { id: 10, url_standard: "https://cdn11.bigcommerce.com/a/clean.jpg", sort_order: 0, is_thumbnail: true },
     {
       id: 11,
       url_standard: "https://cdn11.bigcommerce.com/a/chinese.jpg",
       url_thumbnail: "https://cdn11.bigcommerce.com/a/chinese-small.jpg",
-      sort_order: 1,
-      is_thumbnail: false
+      sort_order: 0,
+      is_thumbnail: true
     }
   ];
   const result = await automate1688Images(capture, { SPT_1688_MAX_IMAGES: "12" }, {
     ...noDescriptionChange,
     listRecentProducts: async () => [{ id: 99, name: capture.sourceTitle, sku: "" }],
     getProductImages: async () => images,
-    getProductVariants: async () => [{ id: 501, image_url: images[1].url_standard }],
+    getProductVariants: async () => [{ id: 501, image_url: images[0].url_standard }],
     getAutomationState: async () => null,
     analyseImage: async url => url.includes("clean")
       ? { action: "keep", containsCjk: false, confidence: 1, textCoverage: 0, essentialFrenchText: [] }
