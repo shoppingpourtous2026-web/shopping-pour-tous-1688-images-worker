@@ -1,0 +1,92 @@
+name: Retraiter un produit 1688
+
+on:
+  workflow_dispatch:
+    inputs:
+      product_id:
+        description: Identifiant numérique du produit BigCommerce à retraiter
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shopping-pour-tous-1688-reprocess
+  cancel-in-progress: false
+
+jobs:
+  reprocess:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Retraiter le produit sans afficher les clés
+        env:
+          PRODUCT_ID: ${{ inputs.product_id }}
+          BIGCOMMERCE_STORE_HASH: ${{ secrets.BIGCOMMERCE_STORE_HASH }}
+          BIGCOMMERCE_ACCESS_TOKEN: ${{ secrets.BIGCOMMERCE_1688_ACCESS_TOKEN }}
+          SPT_1688_CONNECTOR_TOKEN: ${{ secrets.SPT_1688_CONNECTOR_TOKEN }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const productId = Number(process.env.PRODUCT_ID);
+          if (!Number.isInteger(productId) || productId <= 0) throw new Error('product_id_invalide');
+          const storeHash = String(process.env.BIGCOMMERCE_STORE_HASH || '');
+          const bcToken = String(process.env.BIGCOMMERCE_ACCESS_TOKEN || '');
+          const connectorToken = String(process.env.SPT_1688_CONNECTOR_TOKEN || '');
+          if (!storeHash || !bcToken || !connectorToken) throw new Error('secret_manquant');
+          const bcHeaders = { Accept: 'application/json', 'X-Auth-Token': bcToken };
+          const api = `https://api.bigcommerce.com/stores/${storeHash}/v3`;
+          const productResponse = await fetch(`${api}/catalog/products/${productId}?include_fields=id,name`, {
+            headers: bcHeaders
+          });
+          const productPayload = await productResponse.json();
+          if (!productResponse.ok || Number(productPayload?.data?.id) !== productId) {
+            throw new Error(`produit_introuvable_${productResponse.status}`);
+          }
+          const workerResponse = await fetch(
+            'https://shopping-pour-tous-1688-images.shoppingpourtous2026.workers.dev/api/1688/image-automation',
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${connectorToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                confirm: 'AUTOMATE_1688_IMAGES',
+                marketplace: '1688',
+                sourceTitle: String(productPayload.data.name || ''),
+                supplierProductId: '',
+                supplierProductUrl: ''
+              })
+            }
+          );
+          const result = await workerResponse.json().catch(() => ({ error: `http_${workerResponse.status}` }));
+          console.log(JSON.stringify({ etape: 'traitement', statutHttp: workerResponse.status, resultat: result }, null, 2));
+          if (!workerResponse.ok || result?.matched !== true) throw new Error('retraitement_non_termine');
+
+          const stateResponse = await fetch(
+            `${api}/catalog/products/${productId}/metafields?namespace=shopping_1688_images&key=automation_v1&limit=10`,
+            { headers: bcHeaders }
+          );
+          const statePayload = await stateResponse.json();
+          const field = statePayload?.data?.find(item => item?.key === 'automation_v1');
+          const state = field?.value ? JSON.parse(field.value) : null;
+          const diagnostic = state ? {
+            version: state.version,
+            status: state.status,
+            summary: state.summary,
+            description: state.description,
+            images: Array.isArray(state.images) ? state.images.map(image => ({
+              imageId: image.imageId,
+              action: image.action,
+              status: image.status,
+              error: image.error
+            })) : []
+          } : null;
+          console.log(JSON.stringify({ etape: 'diagnostic', diagnostic }, null, 2));
+          NODE
