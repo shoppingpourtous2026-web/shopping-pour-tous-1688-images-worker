@@ -202,7 +202,16 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
   );
   const allCandidates = createCandidates(images, variants, maxImages);
   const candidates = allCandidates.filter(candidate => !processedKeys.has(candidate.key)).slice(0, batchSize);
+  const imageById = new Map(images.map(image => [Number(image.id), image]));
+  const existingClean = images.find(image => processedKeys.has(imageKey(bestImageUrl(image))));
   const analysed = await Promise.all(candidates.map(async candidate => {
+    if (candidate.source === "variant" && existingClean) {
+      return {
+        ...candidate,
+        plan: { action: "keep", containsCjk: false, confidence: 1, textCoverage: 0 },
+        status: "kept"
+      };
+    }
     try {
       const plan = await deps.analyseImage(candidate.url, product.name, env);
       return { ...candidate, plan, status: plan.action === "keep" ? "kept" : "planned" };
@@ -214,8 +223,6 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
     if (item.plan?.action === "keep") processedKeys.add(item.key);
   }
 
-  const imageById = new Map(images.map(image => [Number(image.id), image]));
-  const existingClean = images.find(image => processedKeys.has(imageKey(bestImageUrl(image))));
   const kept = analysed.find(item => item.plan?.action === "keep" && item.imageId);
   let fallback = existingClean
     ? { image: existingClean, url: bestImageUrl(existingClean) }
