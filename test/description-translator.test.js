@@ -38,6 +38,24 @@ test("une description déjà française reçoit une présentation sobre avec ém
   assert.equal(result.html, "<p>✨ Ce produit est facile à utiliser avec votre famille.</p>");
 });
 
+test("une traduction encore mélangée à l'anglais est retentée", async () => {
+  let calls = 0;
+  const source = "<p>Upgraded drain pad material and product size.</p>";
+  const result = await translateDescriptionToFrench(source, {
+    AI: {
+      run: async (_model, options) => {
+        calls += 1;
+        const protectedSource = options.messages[1].content.split("DESCRIPTION À TRADUIRE :\n")[1]
+          .split("\nCONTRÔLE OBLIGATOIRE")[0];
+        if (calls === 1) return { response: protectedSource.replace("and", "et") };
+        return { response: protectedSource.replace("Upgraded drain pad material and product size", "Tapis égouttoir amélioré en silicone et taille du produit") };
+      }
+    }
+  });
+  assert.equal(calls, 2);
+  assert.match(result.html, /✨ Tapis égouttoir amélioré/);
+});
+
 test("une traduction qui perd une valeur protégée est refusée", async () => {
   await assert.rejects(() => translateDescriptionToFrench("<p>Package includes 24 pieces for your home.</p>", {
     AI: {
