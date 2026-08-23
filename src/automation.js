@@ -33,6 +33,7 @@ const defaults = {
 };
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const automationStateVersion = 3;
 
 export function selectCaptureProduct(capture, products) {
   const expected = normaliseTitle(capture?.sourceTitle || capture?.normalisedSourceTitle);
@@ -161,7 +162,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
   const signature = imageSignature(images, variants);
   const originalDescription = String(productDetails?.description || "");
   const originalDescriptionFingerprint = textFingerprint(originalDescription);
-  if (Number(previous?.version) >= 2 && previous?.status === "completed" && previous?.signature === signature &&
+  if (Number(previous?.version) >= automationStateVersion && previous?.status === "completed" && previous?.signature === signature &&
     previous?.descriptionFingerprint === originalDescriptionFingerprint &&
     String(previous?.supplierProductId || "") === capture.supplierProductId) {
     return { matched: true, productId, alreadyProcessed: true, ...previous.summary };
@@ -340,7 +341,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
     }
   }
   const state = {
-    version: 2,
+    version: automationStateVersion,
     status: failed ? "completed_with_warnings" : "completed",
     productId,
     sourceTitle: capture.sourceTitle,
