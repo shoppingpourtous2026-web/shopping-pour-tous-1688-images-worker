@@ -152,7 +152,7 @@ test("une description anglaise est traduite sans modifier le titre du produit", 
   assert.equal(result.descriptionTranslated, 1);
   assert.equal(result.failed, 0);
   assert.deepEqual(updates, [[99, french]]);
-  assert.equal(states[0].version, 2);
+  assert.equal(states[0].version, 3);
   assert.equal(states[0].description.status, "translated_to_french");
   assert.equal(states[0].sourceTitle, capture.sourceTitle);
 });
