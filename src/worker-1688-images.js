@@ -15,7 +15,7 @@ export default {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
     if (request.method === "GET" && url.pathname === "/health") {
-      return jsonResponse({ ok: true, service: "shopping-pour-tous-1688-images", version: "1.0.0" });
+      return jsonResponse({ ok: true, service: "shopping-pour-tous-1688-images", version: "1.1.0" });
     }
     if (request.method !== "POST" || url.pathname !== "/api/1688/image-automation") {
       return jsonResponse({ error: "not_found" }, 404);
