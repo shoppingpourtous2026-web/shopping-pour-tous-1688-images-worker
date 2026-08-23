@@ -156,3 +156,48 @@ test("une description anglaise est traduite sans modifier le titre du produit", 
   assert.equal(states[0].description.status, "translated_to_french");
   assert.equal(states[0].sourceTitle, capture.sourceTitle);
 });
+
+test("une variante impossible à retoucher utilise l'image propre de la galerie", async () => {
+  const relinks = [];
+  const cleanUrl = "https://cdn11.bigcommerce.com/a/clean-all-colours.jpg";
+  const result = await automate1688Images(capture, {}, {
+    ...noDescriptionChange,
+    listRecentProducts: async () => [{ id: 99, name: capture.sourceTitle, sku: "" }],
+    getProductImages: async () => [{ id: 10, url_standard: cleanUrl, is_thumbnail: true }],
+    getProductVariants: async () => [{ id: 501, image_url: "https://cdn11.bigcommerce.com/a/variant-chinese.jpg" }],
+    getAutomationState: async () => null,
+    analyseImage: async url => url === cleanUrl
+      ? { action: "keep", containsCjk: false, confidence: 1, textCoverage: 0 }
+      : { action: "remove_text", containsCjk: true, confidence: 0.99, textCoverage: 0.1 },
+    editImage: async () => { throw new Error("clean_image_verification_failed"); },
+    setVariantImage: async (...args) => relinks.push(args.slice(0, 3)),
+    deleteProductImage: async () => undefined,
+    updateProductImage: async () => undefined,
+    saveAutomationState: async () => undefined
+  });
+  assert.equal(result.variantsUpdated, 1);
+  assert.equal(result.failed, 0);
+  assert.deepEqual(relinks, [[99, 501, cleanUrl]]);
+});
+
+test("une variante rejetée est reliée à l'image propre sans supprimer la dernière image", async () => {
+  const relinks = [];
+  const cleanUrl = "https://cdn11.bigcommerce.com/a/clean-all-colours.jpg";
+  const result = await automate1688Images(capture, {}, {
+    ...noDescriptionChange,
+    listRecentProducts: async () => [{ id: 99, name: capture.sourceTitle, sku: "" }],
+    getProductImages: async () => [{ id: 10, url_standard: cleanUrl, is_thumbnail: true }],
+    getProductVariants: async () => [{ id: 502, image_url: "https://cdn11.bigcommerce.com/a/poster-chinese.jpg" }],
+    getAutomationState: async () => null,
+    analyseImage: async url => url === cleanUrl
+      ? { action: "keep", containsCjk: false, confidence: 1, textCoverage: 0 }
+      : { action: "reject", containsCjk: true, confidence: 0.99, textCoverage: 0.8 },
+    setVariantImage: async (...args) => relinks.push(args.slice(0, 3)),
+    deleteProductImage: async () => { throw new Error("aucune_suppression_attendue"); },
+    updateProductImage: async () => undefined,
+    saveAutomationState: async () => undefined
+  });
+  assert.equal(result.variantsUpdated, 1);
+  assert.equal(result.preservedForSafety, 0);
+  assert.deepEqual(relinks, [[99, 502, cleanUrl]]);
+});
