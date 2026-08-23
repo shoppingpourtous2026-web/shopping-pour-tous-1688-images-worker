@@ -39,5 +39,5 @@ export default {
         error: invalid ? String(error?.message || "invalid_request") : "automation_failed"
       }, invalid ? 400 : 502);
     }
-  }
+  },
 };
