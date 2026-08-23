@@ -47,6 +47,12 @@ export function normalisePlan(raw, minimumConfidence = 0.85) {
 
 export async function analyseImage(imageUrl, productTitle, env) {
   if (!env?.AI?.run) throw new Error("cloudflare_ai_binding_missing");
+  const source = await downloadImage(referenceImageUrl(imageUrl));
+  let binary = "";
+  for (let offset = 0; offset < source.bytes.length; offset += 32_768) {
+    binary += String.fromCharCode(...source.bytes.subarray(offset, offset + 32_768));
+  }
+  const imageDataUri = `data:${source.mimeType};base64,${btoa(binary)}`;
   const question = [
     `Produit : ${String(productTitle || "").slice(0, 500)}.`,
     "Analyse cette image 1688 pour une boutique belge francophone.",
@@ -62,15 +68,24 @@ export async function analyseImage(imageUrl, productTitle, env) {
     "productCount est le nombre d'articles produits clairement visibles, sans compter le décor ni les petits pictogrammes.",
     "N'invente aucune caractéristique."
   ].join(" ");
-  const result = await env.AI.run(env.SPT_1688_VISION_MODEL || "@cf/moondream/moondream3.1-9B-A2B", {
-    task: "query",
-    image: imageUrl,
-    question,
-    reasoning: false,
-    temperature: 0,
-    max_tokens: 900,
-    stream: false
-  });
+  let result;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      result = await env.AI.run(env.SPT_1688_VISION_MODEL || "@cf/moondream/moondream3.1-9B-A2B", {
+        task: "query",
+        image: imageDataUri,
+        question,
+        reasoning: false,
+        temperature: 0,
+        max_tokens: 900,
+        stream: false
+      });
+      break;
+    } catch (error) {
+      if (attempt || !/8008|internal server error/i.test(String(error?.message || error))) throw error;
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
   return normalisePlan(
     parseJsonAnswer(result?.answer),
     Number(env.SPT_1688_MIN_CONFIDENCE) || 0.85
