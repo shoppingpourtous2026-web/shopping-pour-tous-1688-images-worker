@@ -33,7 +33,7 @@ const defaults = {
 };
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-const automationStateVersion = 4;
+const automationStateVersion = 5;
 
 export function selectCaptureProduct(capture, products) {
   const expected = normaliseTitle(capture?.sourceTitle || capture?.normalisedSourceTitle);
@@ -193,21 +193,32 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
     descriptionError = String(error?.message || error).slice(0, 200);
   }
 
-  const maxImages = Math.min(20, Math.max(1, Number(env?.SPT_1688_MAX_IMAGES) || 12));
-  const candidates = createCandidates(images, variants, maxImages);
+  const maxImages = Math.min(20, Math.max(1, Number(env?.SPT_1688_MAX_IMAGES) || 20));
+  const batchSize = Math.min(6, Math.max(1, Number(env?.SPT_1688_BATCH_SIZE) || 4));
+  const processedKeys = new Set(
+    Number(previous?.version) >= automationStateVersion && Array.isArray(previous?.progress?.processedKeys)
+      ? previous.progress.processedKeys.map(value => String(value || "")).filter(Boolean)
+      : []
+  );
+  const allCandidates = createCandidates(images, variants, maxImages);
+  const candidates = allCandidates.filter(candidate => !processedKeys.has(candidate.key)).slice(0, batchSize);
   const analysed = [];
   for (const candidate of candidates) {
     try {
       const plan = await deps.analyseImage(candidate.url, product.name, env);
       analysed.push({ ...candidate, plan, status: plan.action === "keep" ? "kept" : "planned" });
+      if (plan.action === "keep") processedKeys.add(candidate.key);
     } catch (error) {
       analysed.push({ ...candidate, status: "analysis_failed", error: String(error?.message || error) });
     }
   }
 
   const imageById = new Map(images.map(image => [Number(image.id), image]));
+  const existingClean = images.find(image => processedKeys.has(imageKey(bestImageUrl(image))));
   const kept = analysed.find(item => item.plan?.action === "keep" && item.imageId);
-  let fallback = kept ? { image: imageById.get(kept.imageId), url: bestImageUrl(imageById.get(kept.imageId)) } : null;
+  let fallback = existingClean
+    ? { image: existingClean, url: bestImageUrl(existingClean) }
+    : kept ? { image: imageById.get(kept.imageId), url: bestImageUrl(imageById.get(kept.imageId)) } : null;
   let activeGalleryCount = images.length;
   let replaced = 0;
   let deleted = 0;
@@ -250,6 +261,8 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
       fallback ||= { image: created, url: cleanUrl };
       item.status = "replaced";
       item.replacementImageId = Number(created.id) || null;
+      processedKeys.add(item.key);
+      processedKeys.add(imageKey(cleanUrl));
       replaced += 1;
     } catch (error) {
       if (fallback?.url) {
@@ -267,8 +280,10 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
             activeGalleryCount -= 1;
             deleted += 1;
             item.status = "edit_failed_removed_using_clean_fallback";
+            processedKeys.add(item.key);
           } else if (!item.imageId && item.variantIds.length) {
             item.status = "edit_failed_variant_relinked_to_clean_fallback";
+            processedKeys.add(item.key);
           } else {
             item.status = "edit_failed_original_preserved_for_safety";
             item.error = String(error?.message || error);
@@ -307,6 +322,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
         deleted += 1;
       }
       item.status = "rejected_and_removed";
+      processedKeys.add(item.key);
     } catch (error) {
       item.status = "reject_failed_original_preserved";
       item.error = String(error?.message || error);
@@ -324,6 +340,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
         variantsUpdated += 1;
       }
       item.status = "variant_relinked_to_verified_clean_gallery";
+      processedKeys.add(item.key);
     } catch (error) {
       item.status = "variant_clean_fallback_failed_original_preserved";
       item.error = String(error?.message || error);
@@ -344,21 +361,22 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
     descriptionSkipped
   };
   let finalSignature = signature;
-  if (replaced || deleted || variantsUpdated) {
-    try {
-      const [finalImages, finalVariants] = await Promise.all([
-        deps.getProductImages(productId, env),
-        deps.getProductVariants(productId, env)
-      ]);
-      finalSignature = imageSignature(finalImages, finalVariants);
-    } catch (_) {
-      // Le traitement reste valable. Une nouvelle exécution prudente sera autorisée
-      // si BigCommerce n'a pas encore rendu les nouvelles images disponibles.
-    }
+  let remainingCandidates = Math.max(0, allCandidates.length - processedKeys.size);
+  try {
+    const [finalImages, finalVariants] = await Promise.all([
+      deps.getProductImages(productId, env),
+      deps.getProductVariants(productId, env)
+    ]);
+    finalSignature = imageSignature(finalImages, finalVariants);
+    remainingCandidates = createCandidates(finalImages, finalVariants, maxImages)
+      .filter(candidate => !processedKeys.has(candidate.key)).length;
+  } catch (_) {
+    // Le lot reste valable. Le prochain passage reprendra les éléments non marqués.
   }
+  summary.remainingCandidates = remainingCandidates;
   const state = {
     version: automationStateVersion,
-    status: failed ? "completed_with_warnings" : "completed",
+    status: remainingCandidates > 0 ? "in_progress" : failed ? "completed_with_warnings" : "completed",
     productId,
     sourceTitle: capture.sourceTitle,
     supplierProductId: capture.supplierProductId,
@@ -370,8 +388,35 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
       status: descriptionStatus,
       error: descriptionError
     },
+    progress: {
+      processedKeys: [...processedKeys].slice(-200),
+      remainingCandidates
+    },
     images: analysed.map(safePlanSummary)
   };
   await deps.saveAutomationState(productId, state, env);
-  return { matched: true, productId, sourceTitle: capture.sourceTitle, ...summary };
+  return {
+    matched: true,
+    productId,
+    sourceTitle: capture.sourceTitle,
+    hasMore: remainingCandidates > 0,
+    ...summary
+  };
+}
+
+export async function continuePending1688Images(env, injected = {}) {
+  const deps = { ...defaults, ...injected };
+  const products = await deps.listRecentProducts(env, 12);
+  for (const product of products) {
+    const state = await deps.getAutomationState(Number(product.id), env);
+    if (Number(state?.version) < automationStateVersion || state?.status !== "in_progress") continue;
+    return automate1688Images({
+      confirm: "AUTOMATE_1688_IMAGES",
+      marketplace: "1688",
+      sourceTitle: String(product.name || state.sourceTitle || ""),
+      supplierProductId: String(state.supplierProductId || ""),
+      supplierProductUrl: ""
+    }, env, deps);
+  }
+  return { continued: false };
 }
