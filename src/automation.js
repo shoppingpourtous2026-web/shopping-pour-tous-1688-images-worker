@@ -297,6 +297,23 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
     }
   }
 
+  for (const item of analysed.filter(candidate =>
+    !candidate.imageId && candidate.plan?.action === "keep" && candidate.variantIds.length
+  )) {
+    if (!fallback?.url) continue;
+    try {
+      for (const variantId of item.variantIds) {
+        await deps.setVariantImage(productId, variantId, fallback.url, env);
+        variantsUpdated += 1;
+      }
+      item.status = "variant_relinked_to_verified_clean_gallery";
+    } catch (error) {
+      item.status = "variant_clean_fallback_failed_original_preserved";
+      item.error = String(error?.message || error);
+      failed += 1;
+    }
+  }
+
   const summary = {
     analysed: analysed.length,
     kept: analysed.filter(item => item.status === "kept").length,
