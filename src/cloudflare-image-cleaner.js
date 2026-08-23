@@ -51,7 +51,7 @@ const cjkVerdict = value => {
   if (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/u.test(text)) return true;
   const normalised = text.toLowerCase().replace(/[^a-zà-ÿ]+/g, " ").trim();
   if (/\b(clear|none|absent|no|non|aucun|false)\b/.test(normalised)) return false;
-  if (/\b(cjk|yes|oui|present|présent|detected|détecté|true)\b/.test(normalised)) return true;
+  if (/\b(cjk|chinese|chinois|japanese|japonais|korean|coréen|hanzi|kanji|hangul|yes|oui|present|présent|detected|détecté|true)\b/.test(normalised)) return true;
   return null;
 };
 
@@ -143,6 +143,19 @@ export async function analyseImage(imageUrl, productTitle, env) {
     throw error;
   }
   if (verification === null) throw new Error("cloudflare_cjk_verification_unstructured");
+  if (verification === false) {
+    const transcriptionQuestion = [
+      "Recopie exactement, sans traduire, tous les mots et caractères visibles dans cette image.",
+      "Vérifie notamment le grand titre, les petites étiquettes et la bande du bas.",
+      "S'il n'y a absolument aucun texte visible, réponds uniquement NONE."
+    ].join(" ");
+    const transcription = await runVisionQuery(imageDataUri, transcriptionQuestion, env, 240);
+    const transcriptionVerdict = cjkVerdict(transcription);
+    const noVisibleText = /^\s*(none|aucun|no text|pas de texte)\s*[.!]?\s*$/i.test(transcription);
+    if (transcriptionVerdict === true || (!noVisibleText && transcriptionVerdict === null)) {
+      verification = true;
+    }
+  }
   if (verification === false) {
     return primaryPlan || {
       containsCjk: false,
