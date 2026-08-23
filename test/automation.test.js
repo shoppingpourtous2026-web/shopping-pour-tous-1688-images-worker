@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { automate1688Images, selectCaptureProduct, selectRecentCaptureProduct } from "../src/automation.js";
+import { imageKey } from "../src/normalise.js";
 
 const capture = {
   version: 1,
@@ -242,8 +243,12 @@ test("une variante 1688 séparée marquée propre utilise quand même la galerie
     listRecentProducts: async () => [{ id: 99, name: capture.sourceTitle, sku: "" }],
     getProductImages: async () => [{ id: 10, url_standard: cleanUrl, is_thumbnail: true }],
     getProductVariants: async () => [{ id: 503, image_url: "https://cdn11.bigcommerce.com/a/variant-claimed-clean.jpg" }],
-    getAutomationState: async () => null,
-    analyseImage: async () => ({ action: "keep", containsCjk: false, confidence: 1, textCoverage: 0 }),
+    getAutomationState: async () => ({
+      version: 5,
+      status: "in_progress",
+      progress: { processedKeys: [imageKey(cleanUrl)] }
+    }),
+    analyseImage: async () => { throw new Error("variante_ne_doit_pas_etre_reanalyse"); },
     setVariantImage: async (...args) => relinks.push(args.slice(0, 3)),
     deleteProductImage: async () => undefined,
     updateProductImage: async () => undefined,
