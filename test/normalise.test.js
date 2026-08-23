@@ -56,6 +56,7 @@ test("analyseImage transmet les octets de l'image au modèle au lieu de l'URL Bi
       AI: {
         run: async (_model, input) => {
           receivedImage = input.image;
+          if (String(input.question).includes("un seul mot")) return { answer: "CLEAR" };
           return {
             answer: JSON.stringify({
               containsCjk: false,
@@ -73,6 +74,65 @@ test("analyseImage transmet les octets de l'image au modèle au lieu de l'URL Bi
     });
     assert.match(receivedImage, /^data:image\/jpeg;base64,/);
     assert.equal(result.action, "keep");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("analyseImage rattrape une image chinoise classée à tort comme propre", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+    status: 200,
+    headers: { "content-type": "image/jpeg", "content-length": "4" }
+  });
+  try {
+    const result = await analyseImage("https://cdn11.bigcommerce.com/test/image.jpg", "Produit test", {
+      AI: {
+        run: async () => {
+          calls += 1;
+          if (calls === 1) {
+            return { answer: JSON.stringify({
+              containsCjk: false,
+              textCoverage: 0,
+              action: "keep",
+              confidence: 0.96,
+              essentialFrenchText: [],
+              dominantColors: ["yellow"],
+              productCount: 1,
+              reason: "classification initiale incorrecte"
+            }) };
+          }
+          return { answer: "CJK" };
+        }
+      }
+    });
+    assert.equal(result.containsCjk, true);
+    assert.equal(result.action, "remove_text");
+    assert.equal(result.productCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("analyseImage utilise le contrôle court quand la réponse détaillée reste vide", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+    status: 200,
+    headers: { "content-type": "image/jpeg", "content-length": "4" }
+  });
+  try {
+    const result = await analyseImage("https://cdn11.bigcommerce.com/test/image.jpg", "Produit test", {
+      AI: {
+        run: async () => {
+          calls += 1;
+          return calls <= 2 ? { answer: "" } : { answer: "CJK" };
+        }
+      }
+    });
+    assert.equal(result.containsCjk, true);
+    assert.equal(result.action, "remove_text");
   } finally {
     globalThis.fetch = originalFetch;
   }
