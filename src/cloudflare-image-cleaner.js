@@ -151,8 +151,7 @@ export async function analyseImage(imageUrl, productTitle, env) {
     ].join(" ");
     const transcription = await runVisionQuery(imageDataUri, transcriptionQuestion, env, 240);
     const transcriptionVerdict = cjkVerdict(transcription);
-    const noVisibleText = /^\s*(none|aucun|no text|pas de texte)\s*[.!]?\s*$/i.test(transcription);
-    if (transcriptionVerdict === true || (!noVisibleText && transcriptionVerdict === null)) {
+    if (transcriptionVerdict === true) {
       verification = true;
     }
   }
