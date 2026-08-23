@@ -78,7 +78,7 @@ export async function analyseImage(imageUrl, productTitle, env) {
         task: "query",
         image: imageDataUri,
         question,
-        reasoning: false,
+        reasoning: true,
         temperature: 0,
         max_tokens: 900,
         stream: false
@@ -89,8 +89,10 @@ export async function analyseImage(imageUrl, productTitle, env) {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
+  const answer = result?.answer || result?.response || result?.caption ||
+    result?.result?.answer || result?.result?.response;
   return normalisePlan(
-    parseJsonAnswer(result?.answer),
+    parseJsonAnswer(answer),
     Number(env.SPT_1688_MIN_CONFIDENCE) || 0.85
   );
 }
