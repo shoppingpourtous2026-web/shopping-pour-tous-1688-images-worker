@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { imageKey, normaliseTitle, prepareCapture } from "../src/normalise.js";
-import { normalisePlan } from "../src/cloudflare-image-cleaner.js";
+import { analyseImage, normalisePlan } from "../src/cloudflare-image-cleaner.js";
 
 test("prepareCapture accepte uniquement une automatisation 1688 confirmée", () => {
   const result = prepareCapture({
@@ -42,4 +42,38 @@ test("normalisePlan garde, traduit ou rejette prudemment", () => {
     dominantColors: ["pink", "inconnue", "white"],
     productCount: 2
   }).dominantColors, ["pink", "white"]);
+});
+
+test("analyseImage transmet les octets de l'image au modèle au lieu de l'URL BigCommerce", async () => {
+  const originalFetch = globalThis.fetch;
+  let receivedImage = "";
+  globalThis.fetch = async () => new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+    status: 200,
+    headers: { "content-type": "image/jpeg", "content-length": "4" }
+  });
+  try {
+    const result = await analyseImage("https://cdn11.bigcommerce.com/test/image.jpg", "Produit test", {
+      AI: {
+        run: async (_model, input) => {
+          receivedImage = input.image;
+          return {
+            answer: JSON.stringify({
+              containsCjk: false,
+              textCoverage: 0,
+              action: "keep",
+              confidence: 0.99,
+              essentialFrenchText: [],
+              dominantColors: ["white"],
+              productCount: 1,
+              reason: "Aucun texte CJK"
+            })
+          };
+        }
+      }
+    });
+    assert.match(receivedImage, /^data:image\/jpeg;base64,/);
+    assert.equal(result.action, "keep");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
