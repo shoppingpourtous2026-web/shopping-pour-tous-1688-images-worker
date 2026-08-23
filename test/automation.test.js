@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { automate1688Images, selectCaptureProduct } from "../src/automation.js";
+import { automate1688Images, selectCaptureProduct, selectRecentCaptureProduct } from "../src/automation.js";
 
 const capture = {
   version: 1,
@@ -23,6 +23,28 @@ test("selectCaptureProduct exige une correspondance unique", () => {
     { id: 7, name: "Produit test 1688 très utile", sku: "" },
     { id: 8, name: "Autre titre", sku: "DS-123456789-BE" }
   ]), /ambiguous/);
+});
+
+test("le rapprochement récent accepte prudemment un titre partiellement traduit par DSers", () => {
+  const receivedAt = "2026-08-23T19:00:00.000Z";
+  const recentCapture = {
+    ...capture,
+    sourceTitle: "Cartoon toothbrush storage rack wall mounted holder",
+    receivedAt
+  };
+  const result = selectRecentCaptureProduct(recentCapture, [
+    {
+      id: 183,
+      name: "Cartoon brosse à dents Rack de stockage mural",
+      date_created: "2026-08-23T19:01:00.000Z"
+    },
+    {
+      id: 182,
+      name: "Xixi Food Toy Pineapple Bun Powder Puff",
+      date_created: "2026-08-23T18:59:00.000Z"
+    }
+  ]);
+  assert.equal(result.id, 183);
 });
 
 test("une image chinoise est remplacée puis reliée à la variante avant suppression", async () => {
