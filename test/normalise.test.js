@@ -201,3 +201,37 @@ test("editImage demande à Cloudflare une référence inférieure à 512 pixels"
     globalThis.fetch = originalFetch;
   }
 });
+
+test("analyseImage ne confond pas une transcription latine avec du texte CJK", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+    status: 200,
+    headers: { "content-type": "image/jpeg", "content-length": "4" }
+  });
+  try {
+    const result = await analyseImage("https://cdn11.bigcommerce.com/test/image.jpg", "Produit test", {
+      AI: {
+        run: async () => {
+          calls += 1;
+          if (calls === 1) return { answer: JSON.stringify({
+            containsCjk: false,
+            textCoverage: 0,
+            action: "keep",
+            confidence: 0.99,
+            essentialFrenchText: [],
+            dominantColors: ["white"],
+            productCount: 3,
+            reason: "Aucun caractère CJK"
+          }) };
+          if (calls === 2) return { answer: "CLEAR" };
+          return { answer: "Oral-B / SOFT" };
+        }
+      }
+    });
+    assert.equal(result.containsCjk, false);
+    assert.equal(result.action, "keep");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
