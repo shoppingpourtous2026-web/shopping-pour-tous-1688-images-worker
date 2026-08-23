@@ -9,6 +9,52 @@ const parseJsonAnswer = value => {
   return JSON.parse(candidate);
 };
 
+const answerText = result => String(
+  result?.answer || result?.response || result?.caption ||
+  result?.result?.answer || result?.result?.response || result?.result?.caption || ""
+).trim();
+
+const runVisionQuery = async (image, question, env, maxTokens) => {
+  let lastError = new Error("cloudflare_analysis_unstructured:empty");
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const result = await env.AI.run(env.SPT_1688_VISION_MODEL || "@cf/moondream/moondream3.1-9B-A2B", {
+        task: "query",
+        image,
+        question,
+        reasoning: true,
+        temperature: 0,
+        max_tokens: maxTokens,
+        stream: false
+      });
+      const answer = answerText(result);
+      if (answer) return answer;
+      lastError = new Error("cloudflare_analysis_unstructured:empty");
+    } catch (error) {
+      lastError = error;
+      if (!/8008|internal server error/i.test(String(error?.message || error))) throw error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  throw lastError;
+};
+
+const cjkVerdict = value => {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  try {
+    const parsed = parseJsonAnswer(text);
+    if (typeof parsed?.containsCjk === "boolean") return parsed.containsCjk;
+  } catch (_) {
+    // Le second contrôle accepte aussi une réponse très courte CJK/CLEAR.
+  }
+  if (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/u.test(text)) return true;
+  const normalised = text.toLowerCase().replace(/[^a-zà-ÿ]+/g, " ").trim();
+  if (/\b(clear|none|absent|no|non|aucun|false)\b/.test(normalised)) return false;
+  if (/\b(cjk|yes|oui|present|présent|detected|détecté|true)\b/.test(normalised)) return true;
+  return null;
+};
+
 export function normalisePlan(raw, minimumConfidence = 0.85) {
   const plan = raw && typeof raw === "object" ? raw : {};
   const containsCjk = plan.containsCjk === true;
@@ -71,30 +117,55 @@ export async function analyseImage(imageUrl, productTitle, env) {
     "productCount est le nombre d'articles produits clairement visibles, sans compter le décor ni les petits pictogrammes.",
     "N'invente aucune caractéristique."
   ].join(" ");
-  let result;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      result = await env.AI.run(env.SPT_1688_VISION_MODEL || "@cf/moondream/moondream3.1-9B-A2B", {
-        task: "query",
-        image: imageDataUri,
-        question,
-        reasoning: true,
-        temperature: 0,
-        max_tokens: 900,
-        stream: false
-      });
-      break;
-    } catch (error) {
-      if (attempt || !/8008|internal server error/i.test(String(error?.message || error))) throw error;
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
+  let primaryPlan = null;
+  let primaryError = null;
+  try {
+    const answer = await runVisionQuery(imageDataUri, question, env, 900);
+    primaryPlan = normalisePlan(
+      parseJsonAnswer(answer),
+      Number(env.SPT_1688_MIN_CONFIDENCE) || 0.85
+    );
+  } catch (error) {
+    primaryError = error;
   }
-  const answer = result?.answer || result?.response || result?.caption ||
-    result?.result?.answer || result?.result?.response;
-  return normalisePlan(
-    parseJsonAnswer(answer),
-    Number(env.SPT_1688_MIN_CONFIDENCE) || 0.85
-  );
+  if (primaryPlan?.containsCjk === true) return primaryPlan;
+
+  const verificationQuestion = [
+    "Inspecte attentivement toute cette image, y compris les grands titres, les étiquettes et le bas de l'image.",
+    "Y a-t-il au moins un caractère chinois, japonais ou coréen visible ?",
+    "Réponds par un seul mot : CJK si oui, CLEAR si non."
+  ].join(" ");
+  let verification;
+  try {
+    verification = cjkVerdict(await runVisionQuery(imageDataUri, verificationQuestion, env, 120));
+  } catch (error) {
+    if (!primaryPlan) throw primaryError || error;
+    throw error;
+  }
+  if (verification === null) throw new Error("cloudflare_cjk_verification_unstructured");
+  if (verification === false) {
+    return primaryPlan || {
+      containsCjk: false,
+      textCoverage: 0,
+      action: "keep",
+      confidence: 0.95,
+      essentialFrenchText: [],
+      dominantColors: [],
+      productCount: null,
+      reason: "Second contrôle : aucun caractère CJK visible"
+    };
+  }
+  return {
+    ...(primaryPlan || {}),
+    containsCjk: true,
+    textCoverage: primaryPlan?.textCoverage || 0.12,
+    action: "remove_text",
+    confidence: Math.max(primaryPlan?.confidence || 0, 0.95),
+    essentialFrenchText: primaryPlan?.essentialFrenchText || [],
+    dominantColors: primaryPlan?.dominantColors || [],
+    productCount: primaryPlan?.productCount || null,
+    reason: "Second contrôle : caractères CJK détectés"
+  };
 }
 
 const trustedSourceHost = hostname => {
