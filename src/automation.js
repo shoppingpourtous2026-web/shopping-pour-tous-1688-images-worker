@@ -251,15 +251,28 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
       item.replacementImageId = Number(created.id) || null;
       replaced += 1;
     } catch (error) {
+      if (!item.imageId && fallback?.url && item.variantIds.length) {
+        try {
+          for (const variantId of item.variantIds) {
+            await deps.setVariantImage(productId, variantId, fallback.url, env);
+            variantsUpdated += 1;
+          }
+          item.status = "edit_failed_variant_relinked_to_clean_fallback";
+          item.error = String(error?.message || error);
+          continue;
+        } catch (relinkError) {
+          item.error = `${String(error?.message || error)}; ${String(relinkError?.message || relinkError)}`;
+        }
+      }
       item.status = "edit_failed_original_preserved";
-      item.error = String(error?.message || error);
+      item.error ||= String(error?.message || error);
       failed += 1;
     }
   }
 
   for (const item of analysed.filter(candidate => candidate.plan?.action === "reject")) {
     try {
-      if (!fallback?.url || activeGalleryCount <= 1) {
+      if (!fallback?.url || (item.imageId && activeGalleryCount <= 1)) {
         item.status = "rejected_but_preserved_for_safety";
         continue;
       }
