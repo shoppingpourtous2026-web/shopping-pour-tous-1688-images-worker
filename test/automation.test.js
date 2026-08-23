@@ -49,9 +49,16 @@ test("le rapprochement récent accepte prudemment un titre partiellement traduit
 
 test("une image chinoise est remplacée puis reliée à la variante avant suppression", async () => {
   const calls = [];
+  let editedUrl = "";
   const images = [
     { id: 10, url_standard: "https://cdn11.bigcommerce.com/a/clean.jpg", sort_order: 0, is_thumbnail: true },
-    { id: 11, url_standard: "https://cdn11.bigcommerce.com/a/chinese.jpg", sort_order: 1, is_thumbnail: false }
+    {
+      id: 11,
+      url_standard: "https://cdn11.bigcommerce.com/a/chinese.jpg",
+      url_thumbnail: "https://cdn11.bigcommerce.com/a/chinese-small.jpg",
+      sort_order: 1,
+      is_thumbnail: false
+    }
   ];
   const result = await automate1688Images(capture, { SPT_1688_MAX_IMAGES: "12" }, {
     ...noDescriptionChange,
@@ -62,7 +69,10 @@ test("une image chinoise est remplacée puis reliée à la variante avant suppre
     analyseImage: async url => url.includes("clean")
       ? { action: "keep", containsCjk: false, confidence: 1, textCoverage: 0, essentialFrenchText: [] }
       : { action: "remove_text", containsCjk: true, confidence: 0.98, textCoverage: 0.1, essentialFrenchText: [] },
-    editImage: async () => ({ bytes: new Uint8Array([1, 2, 3]), mimeType: "image/png", filename: "clean.png" }),
+    editImage: async url => {
+      editedUrl = url;
+      return { bytes: new Uint8Array([1, 2, 3]), mimeType: "image/png", filename: "clean.png" };
+    },
     uploadProductImage: async () => ({ id: 12, url_standard: "https://cdn11.bigcommerce.com/a/clean-replacement.png" }),
     setVariantImage: async (...args) => calls.push(["variant", ...args.slice(0, 3)]),
     deleteProductImage: async (...args) => calls.push(["delete", ...args.slice(0, 2)]),
@@ -71,6 +81,7 @@ test("une image chinoise est remplacée puis reliée à la variante avant suppre
   });
   assert.equal(result.replaced, 1);
   assert.equal(result.variantsUpdated, 1);
+  assert.equal(editedUrl, "https://cdn11.bigcommerce.com/a/chinese-small.jpg");
   assert.deepEqual(calls[0], ["variant", 99, 501, "https://cdn11.bigcommerce.com/a/clean-replacement.png"]);
   assert.deepEqual(calls[1], ["delete", 99, 11]);
 });
