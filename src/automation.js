@@ -33,7 +33,7 @@ const defaults = {
 };
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-const automationStateVersion = 3;
+const automationStateVersion = 4;
 
 export function selectCaptureProduct(capture, products) {
   const expected = normaliseTitle(capture?.sourceTitle || capture?.normalisedSourceTitle);
@@ -181,7 +181,7 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
       await deps.updateProductDescription(productId, translation.html, env);
       finalDescription = translation.html;
       descriptionTranslated = 1;
-      descriptionStatus = "translated_to_french";
+      descriptionStatus = translation.reason || "translated_to_french";
     } else {
       descriptionSkipped = 1;
       descriptionStatus = translation.reason || "already_french_or_neutral";
@@ -252,13 +252,29 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
       item.replacementImageId = Number(created.id) || null;
       replaced += 1;
     } catch (error) {
-      if (!item.imageId && fallback?.url && item.variantIds.length) {
+      if (fallback?.url) {
         try {
           for (const variantId of item.variantIds) {
             await deps.setVariantImage(productId, variantId, fallback.url, env);
             variantsUpdated += 1;
           }
-          item.status = "edit_failed_variant_relinked_to_clean_fallback";
+          if (item.imageId && activeGalleryCount > 1) {
+            const original = imageById.get(item.imageId);
+            if (original?.is_thumbnail === true && Number(fallback.image?.id)) {
+              await deps.updateProductImage(productId, Number(fallback.image.id), { is_thumbnail: true }, env);
+            }
+            await deps.deleteProductImage(productId, item.imageId, env);
+            activeGalleryCount -= 1;
+            deleted += 1;
+            item.status = "edit_failed_removed_using_clean_fallback";
+          } else if (!item.imageId && item.variantIds.length) {
+            item.status = "edit_failed_variant_relinked_to_clean_fallback";
+          } else {
+            item.status = "edit_failed_original_preserved_for_safety";
+            item.error = String(error?.message || error);
+            failed += 1;
+            continue;
+          }
           item.error = String(error?.message || error);
           continue;
         } catch (relinkError) {
