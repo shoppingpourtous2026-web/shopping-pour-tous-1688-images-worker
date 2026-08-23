@@ -61,6 +61,24 @@ export async function listRecentProducts(env, limit = 100) {
   return Array.isArray(result?.data) ? result.data : [];
 }
 
+export async function getProductDetails(productId, env) {
+  const fields = "id,name,sku,description";
+  const result = await bcRequest(
+    `/catalog/products/${Number(productId)}?include_fields=${encodeURIComponent(fields)}`,
+    {},
+    env
+  );
+  return result?.data || null;
+}
+
+export async function updateProductDescription(productId, description, env) {
+  const result = await bcRequest(`/catalog/products/${Number(productId)}`, {
+    method: "PUT",
+    body: JSON.stringify({ description: String(description || "") })
+  }, env);
+  return result?.data || null;
+}
+
 export async function getProductImages(productId, env) {
   const result = await bcRequest(`/catalog/products/${Number(productId)}/images?limit=250`, {}, env);
   return Array.isArray(result?.data) ? result.data : [];
