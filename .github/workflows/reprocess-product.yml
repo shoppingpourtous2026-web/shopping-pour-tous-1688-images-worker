@@ -48,26 +48,32 @@ jobs:
           if (!productResponse.ok || Number(productPayload?.data?.id) !== productId) {
             throw new Error(`produit_introuvable_${productResponse.status}`);
           }
-          const workerResponse = await fetch(
-            'https://shopping-pour-tous-1688-images.shoppingpourtous2026.workers.dev/api/1688/image-automation',
-            {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${connectorToken}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                confirm: 'AUTOMATE_1688_IMAGES',
-                marketplace: '1688',
-                sourceTitle: String(productPayload.data.name || ''),
-                supplierProductId: '',
-                supplierProductUrl: ''
-              })
-            }
-          );
-          const result = await workerResponse.json().catch(() => ({ error: `http_${workerResponse.status}` }));
-          console.log(JSON.stringify({ etape: 'traitement', statutHttp: workerResponse.status, resultat: result }, null, 2));
-          if (!workerResponse.ok || result?.matched !== true) throw new Error('retraitement_non_termine');
+          let result;
+          for (let lot = 1; lot <= 8; lot += 1) {
+            const workerResponse = await fetch(
+              'https://shopping-pour-tous-1688-images.shoppingpourtous2026.workers.dev/api/1688/image-automation',
+              {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${connectorToken}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  confirm: 'AUTOMATE_1688_IMAGES',
+                  marketplace: '1688',
+                  sourceTitle: String(productPayload.data.name || ''),
+                  supplierProductId: '',
+                  supplierProductUrl: ''
+                })
+              }
+            );
+            result = await workerResponse.json().catch(() => ({ error: `http_${workerResponse.status}` }));
+            console.log(JSON.stringify({ etape: 'traitement', lot, statutHttp: workerResponse.status, resultat: result }, null, 2));
+            if (!workerResponse.ok || result?.matched !== true) throw new Error('retraitement_non_termine');
+            if (result.hasMore !== true) break;
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+          if (result?.hasMore === true) throw new Error('retraitement_incomplet_apres_8_lots');
 
           const stateResponse = await fetch(
             `${api}/catalog/products/${productId}/metafields?namespace=shopping_1688_images&key=automation_v1&limit=10`,
