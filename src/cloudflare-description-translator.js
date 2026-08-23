@@ -1,6 +1,7 @@
 const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/u;
 const TOKEN_RE = /__SPT_(?:TAG|VALUE)_[A-Z]+__/g;
 const UNSAFE_HTML_RE = /<(?:script|style|iframe|object|embed|form|input|button|meta|link)\b|\son[a-z]+\s*=|javascript\s*:/iu;
+const EMOJI_RE = /\p{Extended_Pictographic}/u;
 
 const englishWords = new Set([
   "a", "an", "and", "are", "as", "available", "color", "colour", "design", "description",
@@ -25,6 +26,16 @@ const visibleText = html => String(html || "")
   .replace(/&#39;|&apos;/gi, "'")
   .replace(/\s+/g, " ")
   .trim();
+
+const addProfessionalEmoji = html => {
+  const value = String(html || "");
+  if (!value || EMOJI_RE.test(value)) return value;
+  const styled = value.replace(
+    /(<(?:p|h[1-6]|li|div)\b[^>]*>)(\s*)/i,
+    "$1$2✨ "
+  );
+  return styled === value ? `✨ ${value}` : styled;
+};
 
 const languageSignals = value => {
   const text = visibleText(value).toLocaleLowerCase("fr");
@@ -123,7 +134,12 @@ export async function translateDescriptionToFrench(html, env) {
   const originalHtml = String(html || "").trim();
   if (!originalHtml) return { changed: false, html: originalHtml, reason: "empty" };
   if (!descriptionNeedsTranslation(originalHtml)) {
-    return { changed: false, html: originalHtml, reason: "already_french_or_neutral" };
+    const styled = addProfessionalEmoji(originalHtml);
+    return {
+      changed: styled !== originalHtml,
+      html: styled,
+      reason: styled !== originalHtml ? "french_styled_with_emoji" : "already_french_or_neutral"
+    };
   }
   if (originalHtml.length > 45_000) throw new Error("description_too_large_to_translate_safely");
   if (UNSAFE_HTML_RE.test(originalHtml)) throw new Error("description_html_unsafe_original_preserved");
@@ -137,6 +153,8 @@ export async function translateDescriptionToFrench(html, env) {
     "Tous les marqueurs __SPT_...__ représentent des balises HTML ou des valeurs factuelles protégées.",
     "Recopie chaque marqueur exactement une fois, sans le modifier, et conserve leur ordre.",
     "Ne traduis pas les noms de marque ni les références de modèle.",
+    "Ajoute de 1 à 4 émojis sobres et pertinents au début des rubriques ou phrases importantes, sans remplacer de mot et sans ajouter de promesse commerciale.",
+    "N'utilise jamais d'émoji au milieu d'une dimension, d'une quantité, d'une référence ou d'une valeur technique.",
     "Réponds uniquement avec la description traduite, sans explication et sans bloc Markdown.",
     "DESCRIPTION À TRADUIRE :",
     protectedDescription.protectedText
@@ -152,5 +170,6 @@ export async function translateDescriptionToFrench(html, env) {
   });
   const translated = translatedTextFrom(result);
   const restored = restoreAndValidate(translated, protectedDescription, originalHtml);
-  return { changed: restored !== originalHtml, html: restored, reason: "translated_to_french" };
+  const styled = addProfessionalEmoji(restored);
+  return { changed: styled !== originalHtml, html: styled, reason: "translated_to_french_with_emoji" };
 }
