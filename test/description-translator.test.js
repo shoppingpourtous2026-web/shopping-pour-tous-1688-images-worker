@@ -27,7 +27,15 @@ test("la traduction conserve exactement le HTML, les dimensions et les quantité
     }
   });
   assert.equal(result.changed, true);
-  assert.equal(result.html, '<p class="intro">Carnet de haute qualité avec 12 feuilles.</p><p>Taille: 10 × 8 cm.</p>');
+  assert.equal(result.html, '<p class="intro">✨ Carnet de haute qualité avec 12 feuilles.</p><p>Taille: 10 × 8 cm.</p>');
+});
+
+test("une description déjà française reçoit une présentation sobre avec émoji", async () => {
+  const source = "<p>Ce produit est facile à utiliser avec votre famille.</p>";
+  const result = await translateDescriptionToFrench(source, {});
+  assert.equal(result.changed, true);
+  assert.equal(result.reason, "french_styled_with_emoji");
+  assert.equal(result.html, "<p>✨ Ce produit est facile à utiliser avec votre famille.</p>");
 });
 
 test("une traduction qui perd une valeur protégée est refusée", async () => {
