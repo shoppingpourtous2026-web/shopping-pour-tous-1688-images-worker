@@ -15,8 +15,8 @@
   "vars": {
     "SPT_1688_VISION_MODEL": "@cf/moondream/moondream3.1-9B-A2B",
     "SPT_1688_IMAGE_MODEL": "@cf/black-forest-labs/flux-2-klein-4b",
+    "SPT_1688_TEXT_MODEL": "@cf/zai-org/glm-4.7-flash",
     "SPT_1688_MAX_IMAGES": "12",
     "SPT_1688_MIN_CONFIDENCE": "0.85"
   }
 }
-
