@@ -201,3 +201,23 @@ test("une variante rejetée est reliée à l'image propre sans supprimer la dern
   assert.equal(result.preservedForSafety, 0);
   assert.deepEqual(relinks, [[99, 502, cleanUrl]]);
 });
+
+test("une variante 1688 séparée marquée propre utilise quand même la galerie vérifiée", async () => {
+  const relinks = [];
+  const cleanUrl = "https://cdn11.bigcommerce.com/a/clean-all-colours.jpg";
+  const result = await automate1688Images(capture, {}, {
+    ...noDescriptionChange,
+    listRecentProducts: async () => [{ id: 99, name: capture.sourceTitle, sku: "" }],
+    getProductImages: async () => [{ id: 10, url_standard: cleanUrl, is_thumbnail: true }],
+    getProductVariants: async () => [{ id: 503, image_url: "https://cdn11.bigcommerce.com/a/variant-claimed-clean.jpg" }],
+    getAutomationState: async () => null,
+    analyseImage: async () => ({ action: "keep", containsCjk: false, confidence: 1, textCoverage: 0 }),
+    setVariantImage: async (...args) => relinks.push(args.slice(0, 3)),
+    deleteProductImage: async () => undefined,
+    updateProductImage: async () => undefined,
+    saveAutomationState: async () => undefined
+  });
+  assert.equal(result.variantsUpdated, 1);
+  assert.equal(result.failed, 0);
+  assert.deepEqual(relinks, [[99, 503, cleanUrl]]);
+});
