@@ -189,7 +189,7 @@ const trustedSourceHost = hostname => {
     host === "1688.com" || host.endsWith(".1688.com");
 };
 
-async function downloadImage(imageUrl) {
+async function downloadImage(imageUrl, resizeForEditing = false) {
   let url = new URL(String(imageUrl));
   if (url.protocol !== "https:" || !trustedSourceHost(url.hostname)) throw new Error("image_source_not_allowed");
   const controller = new AbortController();
@@ -197,7 +197,19 @@ async function downloadImage(imageUrl) {
   try {
     let response;
     for (let redirect = 0; redirect <= 3; redirect += 1) {
-      response = await fetch(url.href, { signal: controller.signal, redirect: "manual" });
+      const options = { signal: controller.signal, redirect: "manual" };
+      if (resizeForEditing) {
+        options.cf = {
+          image: {
+            fit: "scale-down",
+            width: 480,
+            height: 480,
+            format: "jpeg",
+            quality: 92
+          }
+        };
+      }
+      response = await fetch(url.href, options);
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
       const location = response.headers.get("location");
       if (!location || redirect === 3) throw new Error("image_redirect_invalid");
@@ -273,7 +285,7 @@ const decodeBase64 = value => {
 
 export async function editImage(imageUrl, plan, productTitle, env) {
   if (!env?.AI?.run) throw new Error("cloudflare_ai_binding_missing");
-  const source = await downloadImage(referenceImageUrl(imageUrl));
+  const source = await downloadImage(referenceImageUrl(imageUrl), true);
   const referenceDimensions = pngDimensions(source.bytes) || jpegDimensions(source.bytes);
   if (!referenceDimensions || referenceDimensions.width >= 512 || referenceDimensions.height >= 512) {
     throw new Error("reference_image_must_be_under_512");
