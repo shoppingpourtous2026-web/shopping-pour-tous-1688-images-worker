@@ -48,11 +48,38 @@ export function selectCaptureProduct(capture, products) {
   return [...matches.values()][0] || null;
 }
 
+const titleTokens = value => new Set(
+  normaliseTitle(value).split(" ").filter(token => token.length >= 3)
+);
+
+export function selectRecentCaptureProduct(capture, products) {
+  const receivedAt = Date.parse(String(capture?.receivedAt || ""));
+  if (!Number.isFinite(receivedAt)) return null;
+  const sourceTokens = titleTokens(capture?.sourceTitle);
+  if (sourceTokens.size < 3) return null;
+  const ranked = [];
+  for (const product of Array.isArray(products) ? products : []) {
+    const createdAt = Date.parse(String(product?.date_created || ""));
+    if (!Number.isFinite(createdAt) || Math.abs(createdAt - receivedAt) > 10 * 60_000) continue;
+    const productTokens = titleTokens(product?.name);
+    const shared = [...sourceTokens].filter(token => productTokens.has(token)).length;
+    const score = shared / Math.max(1, Math.min(sourceTokens.size, productTokens.size));
+    if (shared >= 2 && score >= 0.2) ranked.push({ product, score, shared });
+  }
+  ranked.sort((a, b) => b.score - a.score || b.shared - a.shared);
+  if (!ranked.length) return null;
+  if (ranked[1] && Math.abs(ranked[0].score - ranked[1].score) < 0.05) {
+    throw new Error("capture_1688_recent_match_ambiguous");
+  }
+  return ranked[0].product;
+}
+
 async function findProduct(capture, env, deps) {
   const schedule = [0, 2_000, 4_000, 7_000, 12_000];
   for (const delay of schedule) {
     if (delay) await wait(delay);
-    const product = selectCaptureProduct(capture, await deps.listRecentProducts(env, 100));
+    const products = await deps.listRecentProducts(env, 100);
+    const product = selectCaptureProduct(capture, products) || selectRecentCaptureProduct(capture, products);
     if (product) return product;
   }
   return null;
