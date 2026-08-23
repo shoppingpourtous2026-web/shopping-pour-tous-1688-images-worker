@@ -215,7 +215,10 @@ export async function automate1688Images(rawCapture, env, injected = {}) {
 
   for (const item of analysed.filter(candidate => ["remove_text", "translate"].includes(candidate.plan?.action))) {
     try {
-      const cleaned = await deps.editImage(item.url, item.plan, product.name, env);
+      const editSourceUrl = String(
+        item.image?.url_thumbnail || item.image?.url_standard || item.url
+      ).trim();
+      const cleaned = await deps.editImage(editSourceUrl, item.plan, product.name, env);
       const original = item.imageId ? imageById.get(item.imageId) : null;
       const created = await deps.uploadProductImage(productId, {
         ...cleaned,
